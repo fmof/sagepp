@@ -1,0 +1,6 @@
+build_release/
+build_debug/
+test/exc/
+test/build/
+test/lib/
+test/include/
