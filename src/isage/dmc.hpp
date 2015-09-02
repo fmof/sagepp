@@ -8,8 +8,10 @@
 #define ISAGE_DMC_H_
 
 #include "logging.hpp"
-#include "util.hpp"
 #include "mathops.hpp"
+#include "optimize.hpp"
+#include "util.hpp"
+
 #include <map>
 #include <vector>
 
@@ -55,6 +57,10 @@ namespace dmc {
     inline const double& operator[](const size_t idx) const {
       return probabilities_[idx];
     }
+    inline static void log_renormalize(std::vector<double>* ulp) {
+      const double sum = mathops::log_add(*ulp);
+      isage::util::sum(-1*sum, ulp);
+    }
     inline static int log_u_sample(std::vector<double> ulp) {
       const double sum = mathops::log_add(ulp);
       const double rand_draw = mathops::sample_uniform_log(sum);
@@ -70,13 +76,13 @@ namespace dmc {
 	if(rand_draw <= run_sum) return container_idx;
 	++container_idx;
       }
-      BOOST_LOG_TRIVIAL(debug) << "comparing run_sum = " << run_sum << " with rd " << rand_draw;
+      DEBUG << "comparing run_sum = " << run_sum << " with rd " << rand_draw;
       if(fabs(rand_draw - run_sum) < 1E-8) { 
 	return container_idx - 1;
       }
-      BOOST_LOG_TRIVIAL(error) << "For log-probs with sum " << run_sum << " and random draw " << rand_draw << ", we got to the end of the array and did not find a result";
+      ERROR << "For log-probs with sum " << run_sum << " and random draw " << rand_draw << ", we got to the end of the array and did not find a result";
       for(auto x : ulp) {
-	BOOST_LOG_TRIVIAL(error) << "\tvalue is " << x; 
+	ERROR << "\tvalue is " << x; 
       }
       return -1;
     }
@@ -102,13 +108,69 @@ namespace dmc {
 	if(rand_draw <= run_sum) return container_idx;
 	++container_idx;
       }
-      BOOST_LOG_TRIVIAL(debug) << "comparing run_sum = " << run_sum << " with rd " << rand_draw;
+      DEBUG << "comparing run_sum = " << run_sum << " with rd " << rand_draw;
       if(fabs(rand_draw - run_sum) < 1E-8) { 
 	return container_idx - 1;
       }
-      BOOST_LOG_TRIVIAL(debug) << "For weights with sum " << run_sum << " and random draw " << rand_draw << ", we got to the end of the array and did not find a result";
+      DEBUG << "For weights with sum " << run_sum << " and random draw " << rand_draw << ", we got to the end of the array and did not find a result";
       return -1;
     }
+  };
+
+  struct DirichletVariationalClosure {
+    std::vector<std::vector<double> >* variational_params;
+    double lngamma_min = 1E-8;
+  };
+
+  class dirichlet {
+  public:
+    typedef DirichletVariationalClosure ClosureType;
+    //static double log_partition(const std::vector<double>& params, const unsigned int M);
+    static double hyperparameters_variational_objective(const std::vector<double>& trial, ClosureType* params);
+    static void hyperparameters_variational_gradient(const std::vector<double>& trial_weights, 
+						     ClosureType* params, std::vector<double>& grad);
+    static double hyperparameters_variational_lazy_hessian(const std::vector<double>& trial_weights, 
+							   const int i, const int j, const double M);
+    static void hyperparameters_variational_hessian_diag(const std::vector<double>& trial_weights,
+							 const double M, std::vector<double>& diag);
+    static std::vector<double> hyperparameters_variational_nr(const std::vector<double>& trial_weights,
+						 ClosureType* params,
+						 const double thres = 1E-5,
+						 const int max_iters = 1000);
+    static std::vector<double> hyperparameters_variational_nr(const std::vector<double>& trial_weights,
+						 const std::vector<std::vector<double> >& suff_stats,
+						 const double thres = 1E-5,
+						 const int max_iters = 1000);
+    
+    // Below are three GSL-specific functions. Note that they epx the trial value
+    // (since GSL optimization is only for unconstrained problems.
+    // Unfortunately, these still don't play nicely with the optimizer (even though 
+    // they're correct).
+    static double hyperparameters_variational_objective_gsl(const gsl_vector* trial, void *fparams);
+    static void hyperparameters_variational_gradient_gsl(const gsl_vector* trial_weights, void *fparams, gsl_vector* gsl_grad);
+    static void hyperparameters_variational_obj_grad_gsl(const gsl_vector* trial_weights, void *fparams,
+							 double* f, gsl_vector* grad);
+    static gsl_multimin_function_fdf get_fdf(ClosureType* params, const size_t size);
+    /**
+     * Compute the gradient of the log normalizer A(hypers):
+     * 
+     *   ∂A(hypers)
+     *   ---------- = Ψ(\sum_j hyper_j) - Ψ(hyper_i) 
+     *       ∂i
+     *
+     * where Ψ(x) is the digamma function (derivative of the log Gamma).
+     */
+    static std::vector<double> grad_log_partition_static(const std::vector<double>& vec);
+    /**
+     * Compute the gradient of the log normalizer A(hypers):
+     * 
+     *   ∂A(hypers)
+     *   ---------- = Ψ(\sum_j hyper_j) - Ψ(hyper_i) 
+     *       ∂i
+     *
+     * where Ψ(x) is the digamma function (derivative of the log Gamma).
+     */
+    static void grad_log_partition_static(const std::vector<double>& hyperparameters, std::vector<double>* grad);
   };
 
   class dmc {
@@ -159,7 +221,7 @@ namespace dmc {
      * Compute the gradient of the log normalizer A(hypers):
      * 
      *   ∂A(hypers)
-     *   ---------- = Ψ(hyper_i) - Ψ(\sum_j hyper_j)
+     *   ---------- = Ψ(\sum_j hyper_j) - Ψ(hyper_i) 
      *       ∂i
      *
      * where Ψ(x) is the digamma function (derivative of the log Gamma).
@@ -172,7 +234,7 @@ namespace dmc {
      */
     void reestimate_hyperparameters_wallach1(const std::vector<std::vector<int> >& counts,
 					     int num_iterations = 200, double floor = 1E-9);
-
+    void reestimate_hyperparameters_variational(const std::vector< std::vector<double> >& var_params);
 
     inline void recompute_hyperparameter_sum() {
       hyperparameter_sum_ = 0.0;
@@ -359,7 +421,7 @@ namespace dmc {
       for(int strata = 0; strata < num_strata_; ++strata) {
 	const std::vector<C> strata_counts = counts[strata];
 	if(domain_size > strata_counts.size()) {
-	  BOOST_LOG_TRIVIAL(error) << "domain size = " << domain_size << " is greater than num columns: " << strata_counts.size();
+	  ERROR << "domain size = " << domain_size << " is greater than num columns: " << strata_counts.size();
 	  throw 20;
 	}
 	double strata_sum = 0.0;
@@ -371,7 +433,6 @@ namespace dmc {
 	}
       }
     }
-
     const double log_joint(const std::vector< std::vector<int> >& counts);
   };
 

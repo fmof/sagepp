@@ -3,6 +3,9 @@
 #include "gtest/gtest.h"
 #include "logging.hpp"
 
+#include <iostream>
+#include <sstream>
+
 #include <vector>
 
 TEST(Util, sort_indices_ascending) {
@@ -32,7 +35,7 @@ TEST(Util, sort_indices_descending) {
   EXPECT_EQ(2, s_indices[2]);
 }
 
-TEST(Util, sum_1d) {
+TEST(Util, sum_1d_vecs) {
   std::vector<int> vec;
   vec.push_back(4);
   vec.push_back(10);
@@ -49,7 +52,7 @@ TEST(Util, max_1d) {
   vec.push_back(4);
   vec.push_back(10);
   vec.push_back(0);
-  int m = isage::util::max<int>(vec);
+  int m = isage::util::max(vec);
   ASSERT_EQ(10, m);
 }
 
@@ -117,8 +120,52 @@ TEST(Util, sum_1d) {
   vec.push_back(4);
   vec.push_back(10);
   vec.push_back(0);
-  int m = isage::util::sum<int>(vec);
+  int m = isage::util::sum(vec);
   ASSERT_EQ(14, m);
+}
+
+TEST(Util, sum_in_first) {
+  std::vector<int> vec = {4, 10, 0};
+  std::vector<int> other = {7, -3, 1};
+  isage::util::sum_in_first(&vec, other);
+  std::vector<int> expected = {11, 7, 1};
+  for(size_t i = 0; i < 3; ++i) {
+    ASSERT_EQ(expected[i], vec[i]);
+  }
+}
+TEST(Util, lc_in_first) {
+  std::vector<int> vec = {4, 10, 0};
+  std::vector<int> other = {7, -3, 1};
+  int a = 5, b = 3;
+  isage::util::linear_combination_in_first(&vec, other, a, b);
+  std::vector<int> expected = {41, 41, 3};
+  for(size_t i = 0; i < 3; ++i) {
+    ASSERT_EQ(expected[i], vec[i]);
+  }
+}
+
+TEST(Util, scalar_product_int_int_1d) {
+  std::vector<int> vec;
+  vec.push_back(4);
+  vec.push_back(10);
+  vec.push_back(0);
+  const int scale = 5;
+  std::vector<int> ret = isage::util::scalar_product(scale, vec);
+  ASSERT_EQ(20, ret[0]);
+  ASSERT_EQ(50, ret[1]);
+  ASSERT_EQ(0,  ret[2]);
+}
+
+TEST(Util, scalar_product_int_double_1d) {
+  std::vector<double> vec;
+  vec.push_back(4.0);
+  vec.push_back(10.0);
+  vec.push_back(0.0);
+  const int scale = 5;
+  std::vector<double> ret = isage::util::scalar_product(scale, vec);
+  ASSERT_EQ(20.0, ret[0]);
+  ASSERT_EQ(50.0, ret[1]);
+  ASSERT_EQ(0.0,  ret[2]);
 }
 
 TEST(Util, marginals) {
@@ -164,4 +211,60 @@ TEST(Util, marginal_histogram1) {
   for(int i = 0; i < 6; ++i) {
     EXPECT_EQ(expected[i], m_histogram[i]) << "(" << i << ") not equal";
   }
+}
+
+TEST(Util, square_ref) {
+  std::vector<int> vec = {5, 4};
+  std::vector<int> expected = {25, 16};
+  std::vector<int> res = isage::util::square(vec);
+  for(int i = 0; i < 2; ++i) {
+    ASSERT_NEAR(expected[i], res[i], 1E-6) << "(" << i << ") not equal";
+  }
+}
+TEST(Util, cube_ref) {
+  std::vector<int> vec = {5, 4};
+  std::vector<int> expected = {125, 64};
+  std::vector<int> res = isage::util::cube(vec);
+  for(int i = 0; i < 2; ++i) {
+    ASSERT_NEAR(expected[i], res[i], 1E-6) << "(" << i << ") not equal";
+  }
+}
+TEST(Util, quartic_ref) {
+  std::vector<int> vec = {5, 4};
+  std::vector<int> expected = {625, 256};
+  std::vector<int> res = isage::util::quartic(vec);
+  for(int i = 0; i < 2; ++i) {
+    ASSERT_NEAR(expected[i], res[i], 1E-6) << "(" << i << ") not equal";
+  }
+}
+
+TEST(Util, slice) {
+  std::vector< std::vector<int> > vec;
+  vec.push_back(std::vector<int> { 0, 3, 2});
+  vec.push_back(std::vector<int> { -1, 192, -10});
+  std::vector<int> slice;
+  for(size_t col = 0; col < 3; ++col) {
+    slice = isage::util::column(vec, col);
+    ASSERT_EQ(2, slice.size());
+    ASSERT_EQ(vec[0][col], slice[0]);
+    ASSERT_EQ(vec[1][col], slice[1]);
+  }
+}
+
+TEST(Util, frobenius_norm) {
+  std::vector<std::vector<int> > matrix = {{2, -1}, {-1, 2}};
+  double expected = sqrt(10);
+  double val = isage::util::frobenius_norm(matrix);
+  ASSERT_NEAR(expected, val, 1E-5);
+}
+
+TEST(Util, smart_writer_to_dev_null) {
+  isage::util::SmartWriter sw("/dev/null");
+  std::stringstream buffer;
+  std::streambuf * old = std::cout.rdbuf(buffer.rdbuf());
+  std::ostream& writer = sw.get();
+  writer << "This is a test\n";
+  std::string text = buffer.str();
+  ASSERT_EQ(0, text.size());
+  std::cout.rdbuf(old);
 }

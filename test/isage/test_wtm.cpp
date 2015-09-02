@@ -1,11 +1,12 @@
 #include "gtest/gtest.h"
 
-#include "concrete_util/io.h"
 #include "logging.hpp"
+#include "sage.hpp"
 #include "wtm.hpp"
 #include "wtm_sampling.hpp"
 #include "wtm_variational.hpp"
 
+#include <string>
 #include <vector>
 
 #include <gsl/gsl_rng.h>
@@ -44,118 +45,145 @@ TEST(GSL_RNG, use_1000) {
   ASSERT_EQ(1000, i);
 }
 
-TEST(DiscreteLDASampler, run_100) {
-  boost::log::core::get()->set_filter
-    (
-     boost::log::trivial::severity >= boost::log::trivial::debug
-     );
-  int num_iterations = 100;
-  int burnin = 10;
-  int num_topics = 5;
-  typedef std::string string;
-  typedef isage::wtm::Vocabulary<string> SVocab;
-  typedef isage::wtm::Document< string > Doc;
-  typedef isage::wtm::DiscreteLDA<string, std::vector<double> > Model;
-  typedef isage::wtm::CollapsedGibbsDMC<Doc, string > Sampler;
-
-  SVocab word_vocab("__WORD_OOV__");
-  isage::wtm::SymmetricHyperparams shp = isage::wtm::SymmetricHyperparams();
-  shp.h_word = 0.1;
-  shp.h_theta = 0.1;
-  isage::wtm::SampleEveryIter sample_strat(num_iterations, burnin);
-
-  isage::wtm::Corpus< Doc > corpus("my_corpus");
-  int num_comms = 0;
-  concrete::util::CommunicationSequence *concrete_reader;
-  concrete::util::get_communication_sequence( "test/resources/NYT_ENG_19980113.0597.dir", concrete_reader );
-  for(concrete_reader->begin(); concrete_reader->keep_reading(); 
-      concrete_reader->operator++()) {
-    concrete::Communication communication = *(*concrete_reader);
-    isage::wtm::WordPruner< string > wp(&word_vocab);
-    BOOST_LOG_TRIVIAL(trace) << communication.id;
-    ++num_comms;
-    Doc my_doc(communication, wp);
-    corpus.add_document(my_doc);
+TEST(Vocabulary, create_from_nl_file) {
+  std::string path = "test/resources/vocab_list_simple.txt";
+  typedef isage::wtm::Vocabulary<std::string> Vocab;
+  Vocab vocab = Vocab::from_file(path, "__OOV__");
+  std::vector<std::string> expected_words = {
+    "__OOV__", "The", "dog", "ran", "with", "the",
+    "man", ".", "cat", "meowed"
+  };
+  ASSERT_EQ(10, vocab.num_words());
+  for(size_t i = 0; i < 10; ++i) {
+    ASSERT_EQ(expected_words[i], vocab.word(i));
   }
-  delete concrete_reader;
-  ASSERT_EQ(1, num_comms);
-  ASSERT_EQ(1, corpus.num_docs());
-  Model dm(num_topics, &shp, &word_vocab);
-  Sampler sampler(&dm, &corpus, &word_vocab);
-  sampler.sampling_strategy(&sample_strat);
-  isage::wtm::RandomInitializer ri(num_topics);
-  sampler.init(ri);
-  sampler.learn();
+  vocab.make_word("foo_bar");
+  ASSERT_EQ(10, vocab.num_words());
 }
 
-TEST(DiscreteVariational, create) {
-  boost::log::core::get()->set_filter
-    (
-     boost::log::trivial::severity >= boost::log::trivial::trace
-     );
-  int num_iterations = 100;
-  int burnin = 10;
-  int num_topics = 5;
-  typedef std::string string;
-  typedef isage::wtm::Vocabulary<string> SVocab;
-  typedef isage::wtm::Document< string > Doc;
-  typedef isage::wtm::DiscreteLDA<string, std::vector<double> > Model;
-  typedef isage::wtm::DiscreteVariational<Doc, string, std::vector<double> > Variational;
-
-  SVocab word_vocab("__WORD_OOV__");
-  isage::wtm::SymmetricHyperparams shp = isage::wtm::SymmetricHyperparams();
-  shp.h_word = 0.1;
-  shp.h_theta = 0.1;
-  isage::wtm::SampleEveryIter sample_strat(num_iterations, burnin);
-
-  isage::wtm::Corpus< Doc > corpus("my_corpus");
-  int num_comms = 0;
-  concrete::util::CommunicationSequence *concrete_reader;
-  int num_words_total = 0;
-  concrete::util::get_communication_sequence( "test/resources/NYT_ENG_19980113.0597.dir", concrete_reader );
-  for(concrete_reader->begin(); concrete_reader->keep_reading(); 
-      concrete_reader->operator++()) {
-    concrete::Communication communication = *(*concrete_reader);
-    isage::wtm::WordPruner< string > wp(&word_vocab);
-    BOOST_LOG_TRIVIAL(trace) << communication.id;
-    ++num_comms;
-    Doc my_doc(communication, wp);
-    num_words_total += my_doc.num_words();
-    corpus.add_document(my_doc);
-  }
-  delete concrete_reader;
-  ASSERT_EQ(1, num_comms);
-  ASSERT_EQ(1, corpus.num_docs());
-  Model dm(num_topics, &shp, &word_vocab);
-
-  Variational var_inf(&dm, &corpus, &word_vocab);
-  isage::wtm::UniformHyperSeedWeightedInitializer uni_mult(num_topics, num_comms, (double)num_words_total);
-  var_inf.init(uni_mult);
-  //test the initialization
-  std::vector<std::vector<std::vector<double> > > vap = var_inf.var_assignment_params();
-  ASSERT_EQ(1, vap.size());
-  const int nw = corpus[0].num_words();
-  ASSERT_EQ(nw, vap[0].size());
-  for(int i = 0; i < nw; ++i) {
-    ASSERT_EQ(num_topics, vap[0][i].size());
-    for(int j = 0; j < num_topics; ++j) {
-      ASSERT_EQ(1.0/(double)num_topics, vap[0][i][j]);
+TEST(Document, str_svm_light_file) {
+  #ifndef ISAGE_LOG_AS_COUT
+  boost::log::core::get()->set_filter(boost::log::trivial::severity >= boost::log::trivial::info);
+  #endif
+  std::string path = "test/resources/vocab_list_simple.txt";
+  typedef isage::wtm::Vocabulary<std::string> Vocab;
+  Vocab vocab = Vocab::from_file(path, "__OOV__");
+  typedef isage::wtm::Document<std::string, int> Doc;
+  std::map<std::string, int> counts;
+  counts["The"] = 3;
+  counts["dog"] = 1;
+  counts["ran"] = 2;
+  counts["with"] = 2;
+  counts["the"] = 2;
+  counts["man"] = 2;
+  counts["."] = 3;
+  counts["cat"] = 2;
+  counts["meowed"] = 1;
+  {
+    Doc doc =  
+      Doc::from_svm_light_string("1 1:3 2:1 3:2 4:2 5:2 6:2 7:3 8:2 9:1 # doc_1",
+				 vocab);
+    ASSERT_EQ("doc_1", doc.id);
+    typename Doc::Multinomial mult = doc.multinomial();
+    ASSERT_EQ(9, mult.size());
+    ASSERT_EQ(18, doc.num_words());
+    ASSERT_TRUE(doc.type_view());
+    for(const auto& pair : mult) {
+      ASSERT_EQ(counts[pair.first], pair.second) << "Counts not equal for " << pair.first;
     }
   }
-  std::vector<std::vector<double> > vtp = var_inf.var_topic_params();
-  ASSERT_EQ(num_topics, vtp.size());
-  for(int i = 0; i < num_topics; ++i) {
-    ASSERT_EQ(word_vocab.num_words(), vtp[i].size());
-    for(int j = 0; j < word_vocab.num_words(); ++j) {
-      ASSERT_EQ(shp.h_word + (double)num_words_total/(double)word_vocab.num_words(), vtp[i][j]);
+  {
+    Doc doc = Doc::from_svm_light_string("1 1:3 2:1 3:2 4:2 5:2 6:2 7:3 8:2 9:1 # ",
+					 vocab);
+    ASSERT_EQ("UnknownDocId", doc.id);
+    typename Doc::Multinomial mult = doc.multinomial();
+    ASSERT_EQ(9, mult.size());
+    ASSERT_EQ(18, doc.num_words());
+    ASSERT_TRUE(doc.type_view());
+    for(const auto& pair : mult) {
+      ASSERT_EQ(counts[pair.first], pair.second) << "Counts not equal for " << pair.first;
     }
-  }
-  std::vector<std::vector<double> > vtup = var_inf.var_topic_usage_params();
-  ASSERT_EQ(1, vtup.size());
-  ASSERT_EQ(num_topics, vtup[0].size());
-  for(int j = 0; j < num_topics; ++j) {
-    ASSERT_EQ(shp.h_theta + (double)num_comms/(double)num_topics, vtup[0][j]);
-  }
-
-  var_inf.learn();
+  } 
+  {
+    Doc doc = Doc::from_svm_light_string("1 1:3 2:1 3:2 4:2 5:2 6:2 7:3 8:2 9:1  ",
+					 vocab);
+    ASSERT_EQ("UnknownDocId", doc.id);
+    typename Doc::Multinomial mult = doc.multinomial();
+    ASSERT_EQ(9, mult.size());
+    ASSERT_EQ(18, doc.num_words());
+    ASSERT_TRUE(doc.type_view());
+    for(const auto& pair : mult) {
+      ASSERT_EQ(counts[pair.first], pair.second) << "Counts not equal for " << pair.first;
+    }
+  } 
 }
+TEST(Document, int_svm_light_file) {
+  #ifndef ISAGE_LOG_AS_COUT
+  boost::log::core::get()->set_filter(boost::log::trivial::severity >= boost::log::trivial::info);
+  #endif
+  std::string path = "test/resources/vocab_list_simple.txt";
+  typedef isage::wtm::Vocabulary<int> Vocab;
+  Vocab vocab(0);
+  for(int i = 0; i < 9; i++) vocab.make_word(i + 1);
+  typedef isage::wtm::Document<int, int> Doc;
+  {
+    std::vector<int> counts = {0, 3, 1, 2, 2, 2, 2, 3, 2, 1};
+    Doc doc = Doc::from_svm_light_string("1 1:3 2:1 3:2 4:2 5:2 6:2 7:3 8:2 9:1 # doc_1",
+					 vocab);
+    ASSERT_EQ("doc_1", doc.id);
+    typename Doc::Multinomial mult = doc.multinomial();
+    ASSERT_EQ(9, mult.size());
+    ASSERT_EQ(18, doc.num_words());
+    ASSERT_TRUE(doc.type_view());
+    for(const auto& pair : mult) {
+      ASSERT_EQ(counts[pair.first], pair.second) << "Counts not equal for " << pair.first;
+    }
+  }
+}
+TEST(Document, str_svm_light_file_fractional_values) {
+  #ifndef ISAGE_LOG_AS_COUT
+  boost::log::core::get()->set_filter(boost::log::trivial::severity >= boost::log::trivial::info);
+  #endif
+  std::string path = "test/resources/vocab_list_simple.txt";
+  typedef isage::wtm::Vocabulary<std::string> Vocab;
+  Vocab vocab = Vocab::from_file(path, "__OOV__");
+  typedef isage::wtm::Document<std::string, double> Doc;
+  std::map<std::string, double> counts;
+  counts["The"] = 3.9;
+  counts["dog"] = 1;
+  counts["ran"] = 2.1;
+  counts["with"] = 2;
+  counts["the"] = 2;
+  counts["man"] = 2;
+  counts["."] = 3;
+  counts["cat"] = 2.5;
+  counts["meowed"] = 1;
+  {
+    Doc doc = Doc::from_svm_light_string("1 1:3.9 2:1 3:2.1 4:2 5:2 6:2 7:3 8:2.5 9:1 # doc_1",
+					 vocab);
+    ASSERT_EQ("doc_1", doc.id);
+    typename Doc::Multinomial mult = doc.multinomial();
+    ASSERT_EQ(9, mult.size());
+    ASSERT_EQ(19.5, doc.num_words());
+    ASSERT_TRUE(doc.type_view());
+    for(const auto& pair : mult) {
+      ASSERT_EQ(counts[pair.first], pair.second) << "Counts not equal for " << pair.first;
+    }
+  }
+}
+
+TEST(Corpus, svm_light_file) {
+  #ifndef ISAGE_LOG_AS_COUT
+  boost::log::core::get()->set_filter(boost::log::trivial::severity >= boost::log::trivial::info);
+  #endif
+  typedef isage::wtm::Vocabulary<std::string> Vocab;
+  Vocab vocab = Vocab::from_file("test/resources/vocab_list_simple.txt", "__OOV__");
+  typedef isage::wtm::Document<std::string> Doc;
+  typedef isage::wtm::Corpus<Doc> Corpus;
+  Corpus corpus("train", "test/resources/simple_svm_light.txt", vocab);
+  ASSERT_EQ(3, corpus.num_docs());
+  ASSERT_EQ("doc_1", corpus[0].id);
+  ASSERT_EQ("doc_2", corpus[1].id);
+  ASSERT_EQ("doc_3", corpus[2].id);
+}
+

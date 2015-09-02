@@ -3,7 +3,6 @@
 #ifndef ISAGE_WTM_SAMPLING_H_
 #define ISAGE_WTM_SAMPLING_H_
 
-#include "concrete.hpp"
 #include "dmc.hpp"
 #include "mathops.hpp"
 #include "util.hpp"
@@ -184,7 +183,7 @@ namespace isage {
 		--c_topic[prev][word];
 		--c_topic_sums[prev];
 		int sampled = sample_topic();
-		BOOST_LOG_TRIVIAL(trace) << "sampled topic:" << sampled;
+		TRACE << "sampled topic:" << sampled;
 		//add counts back
 		++c_topic[sampled][word];
 		++c_topic_sums[sampled];
